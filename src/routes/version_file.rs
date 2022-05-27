@@ -1,6 +1,7 @@
 use super::ApiError;
 use crate::database::models::{version_item::QueryVersion, DatabaseError};
 use crate::file_hosting::FileHost;
+use crate::models::projects::VersionType;
 use crate::models::projects::{GameVersion, Loader, Version};
 use crate::models::teams::Permissions;
 use crate::util::auth::get_user_from_headers;
@@ -221,6 +222,7 @@ pub async fn delete_file(
 pub struct UpdateData {
     pub loaders: Vec<Loader>,
     pub game_versions: Vec<GameVersion>,
+    pub version_types: Option<Vec<VersionType>>,
 }
 
 #[post("{version_id}/update")]
@@ -272,7 +274,25 @@ pub async fn get_update_from_hash(
         )
         .await?;
 
-        if let Some(version_id) = version_ids.last() {
+        if let Some(version_types) = &update_data.version_types {
+            let mut versions =
+                database::models::Version::get_many_full(version_ids, &**pool)
+                    .await?;
+
+            versions.sort_by(|a, b| b.date_published.cmp(&a.date_published));
+
+            let allowed_types: Vec<&str> =
+                version_types.iter().map(|v| v.as_str()).collect();
+
+            let mut filtered: Vec<QueryVersion> = versions
+                .into_iter()
+                .filter(|ver| {
+                    allowed_types.contains(&ver.version_type.as_str())
+                })
+                .collect();
+
+            ok_or_not_found::<QueryVersion, Version>(filtered.pop())
+        } else if let Some(version_id) = version_ids.last() {
             let version_data =
                 database::models::Version::get_full(*version_id, &**pool)
                     .await?;
@@ -400,6 +420,7 @@ pub struct ManyUpdateData {
     pub hashes: Vec<String>,
     pub loaders: Vec<Loader>,
     pub game_versions: Vec<GameVersion>,
+    pub version_types: Option<Vec<VersionType>>,
 }
 
 #[post("update")]
@@ -453,7 +474,28 @@ pub async fn update_files(
         )
         .await?;
 
-        if let Some(latest_version) = updated_versions.last() {
+        if let Some(version_types) = &update_data.version_types {
+            let mut versions =
+                database::models::Version::get_many(updated_versions, &**pool)
+                    .await?;
+
+            versions.sort_by(|a, b| b.date_published.cmp(&a.date_published));
+
+            let allowed_types: Vec<&str> =
+                version_types.iter().map(|v| v.as_str()).collect();
+
+            let mut filtered: Vec<database::models::version_item::Version> =
+                versions
+                    .into_iter()
+                    .filter(|ver| {
+                        allowed_types.contains(&ver.version_type.as_str())
+                    })
+                    .collect();
+
+            if let Some(last) = filtered.pop() {
+                version_ids.push(last.id);
+            }
+        } else if let Some(latest_version) = updated_versions.last() {
             version_ids.push(*latest_version);
         }
     }
